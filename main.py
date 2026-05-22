@@ -6,7 +6,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEx-o0K2coqsR0Tb5JHnM0JVzkY5Z4HXVI')
+TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEHReRHUMRx5feJJoU-gvOtRh340MQZhzI')
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -42,7 +42,7 @@ def init_db():
             except:
                 pass
 
-# ========== ШВИДКЕ ДОДАВАННЯ ==========
+# ========== ШВИДКЕ ДОДАВАННЯ (БЕЗ ЗАЙВИХ ПИТАНЬ) ==========
 @dp.message(F.text == "⚡ Швидке додавання")
 async def quick_mode(m: Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -54,7 +54,7 @@ async def quick_mode(m: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("q_"))
 async def quick_status(c: CallbackQuery, state: FSMContext):
     status = 'read' if c.data == "q_read" else 'wish'
-    await state.update_data(quick_status=status)
+    await state.update_data(quick_status=status, quick_waiting=True)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Цього року", callback_data="qy_this"),
          InlineKeyboardButton(text="Інший рік", callback_data="qy_other")]
@@ -65,7 +65,7 @@ async def quick_status(c: CallbackQuery, state: FSMContext):
 async def quick_year(c: CallbackQuery, state: FSMContext):
     if c.data == "qy_this":
         await state.update_data(quick_year=datetime.now().year)
-        await c.message.edit_text("✅ Перешліть файл книги!")
+        await c.message.edit_text("✅ Тепер просто **перешліть файл книги** - я сам все збережу!")
         await state.set_state(LibS.quick_year_state)
     else:
         await c.message.edit_text("Введіть рік (наприклад: 2020):")
@@ -75,11 +75,53 @@ async def quick_year(c: CallbackQuery, state: FSMContext):
 async def quick_receive(m: Message, state: FSMContext):
     data = await state.get_data()
     
+@dp.message(LibS.quick_year_state)
+async def quick_receive(m: Message, state: FSMContext):
+    data = await state.get_data()
+    
     # Якщо ще немає року - це введення року
     if 'quick_year' not in data:
         try:
             year = int(m.text.strip())
             if 1900 <= year <= datetime.now().year:
+                await state.update_data(quick_year=year)
+                await m.answer("✅ Рік збережено! Тепер перешліть файл книги:")
+                return
+            else:
+                await m.answer(f"❌ Введіть рік 1900-{datetime.now().year}")
+                return
+        except:
+            await m.answer("❌ Введіть число!")
+            return
+    
+    # Якщо є рік і це файл - ЗБЕРІГАЄМО БЕЗ ЗАЙВИХ ПИТАНЬ!
+    if m.document:
+        file_id = m.document.file_id
+        file_name = m.document.file_name or "Невідома назва"
+        title = file_name.rsplit('.', 1)[0]
+        author = "Невідомий автор"
+        description = "Додано через швидке додавання"
+        year = data.get('quick_year', datetime.now().year)
+        
+        if data.get('quick_status') == 'read':
+            with sqlite3.connect('my_library.db') as conn:
+                conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) 
+                               VALUES (?,?,?,?,?,?,?,?,?)''',
+                               (title, author, description, 0, file_id, 'read', 
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'), year))
+            await m.answer(f"✅ **{title}** додано до ПРОЧИТАНИХ!\n📅 Рік: {year}\n⭐ Оцінка: без оцінки (можна змінити)")
+        else:
+            with sqlite3.connect('my_library.db') as conn:
+                conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added) 
+                               VALUES (?,?,?,?,?,?,?)''',
+                               (title, author, description, 0, file_id, 'wish', 
+                                datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            await m.answer(f"✨ **{title}** додано до ПЛАНІВ!")
+        
+        await state.clear()  # Виходимо з режиму швидкого додавання
+    else:
+        await m.answer("❌ Перешліть **файл книги**!")
                 await state.update_data(quick_year=year)
                 await m.answer("✅ Рік збережено! Тепер перешліть файл книги:")
                 return
