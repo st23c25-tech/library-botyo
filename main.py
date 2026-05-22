@@ -54,7 +54,7 @@ async def quick_mode(m: Message, state: FSMContext):
 @dp.callback_query(F.data.startswith("q_"))
 async def quick_status(c: CallbackQuery, state: FSMContext):
     status = 'read' if c.data == "q_read" else 'wish'
-    await state.update_data(quick_status=status, quick_waiting=True)
+    await state.update_data(quick_status=status)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Цього року", callback_data="qy_this"),
          InlineKeyboardButton(text="Інший рік", callback_data="qy_other")]
@@ -65,16 +65,12 @@ async def quick_status(c: CallbackQuery, state: FSMContext):
 async def quick_year(c: CallbackQuery, state: FSMContext):
     if c.data == "qy_this":
         await state.update_data(quick_year=datetime.now().year)
-        await c.message.edit_text("✅ Тепер просто **перешліть файл книги** - я сам все збережу!")
+        await c.message.edit_text("✅ Тепер просто перешліть файл книги - я сам все збережу!")
         await state.set_state(LibS.quick_year_state)
     else:
         await c.message.edit_text("Введіть рік (наприклад: 2020):")
         await state.set_state(LibS.quick_year_state)
 
-@dp.message(LibS.quick_year_state)
-async def quick_receive(m: Message, state: FSMContext):
-    data = await state.get_data()
-    
 @dp.message(LibS.quick_year_state)
 async def quick_receive(m: Message, state: FSMContext):
     data = await state.get_data()
@@ -110,67 +106,18 @@ async def quick_receive(m: Message, state: FSMContext):
                                (title, author, description, 0, file_id, 'read', 
                                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                                 datetime.now().strftime('%Y-%m-%d %H:%M:%S'), year))
-            await m.answer(f"✅ **{title}** додано до ПРОЧИТАНИХ!\n📅 Рік: {year}\n⭐ Оцінка: без оцінки (можна змінити)")
+            await m.answer(f"✅ {title} додано до ПРОЧИТАНИХ!\n📅 Рік: {year}")
         else:
             with sqlite3.connect('my_library.db') as conn:
                 conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added) 
                                VALUES (?,?,?,?,?,?,?)''',
                                (title, author, description, 0, file_id, 'wish', 
                                 datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            await m.answer(f"✨ **{title}** додано до ПЛАНІВ!")
+            await m.answer(f"✨ {title} додано до ПЛАНІВ!")
         
-        await state.clear()  # Виходимо з режиму швидкого додавання
-    else:
-        await m.answer("❌ Перешліть **файл книги**!")
-                await state.update_data(quick_year=year)
-                await m.answer("✅ Рік збережено! Тепер перешліть файл книги:")
-                return
-            else:
-                await m.answer(f"❌ Введіть рік 1900-{datetime.now().year}")
-                return
-        except:
-            await m.answer("❌ Введіть число!")
-            return
-    
-    # Якщо є рік і це файл
-    if m.document:
-        file_id = m.document.file_id
-        file_name = m.document.file_name or "Невідома назва"
-        title = file_name.rsplit('.', 1)[0]
-        await state.update_data(quick_file_id=file_id, quick_title=title)
-        await state.set_state(LibS.quick_author_state)
-        await m.answer(f"📖 {title}\nВведіть автора:")
-    else:
-        await m.answer("❌ Перешліть **файл книги**!")
-
-@dp.message(LibS.quick_author_state)
-async def quick_author(m: Message, state: FSMContext):
-    await state.update_data(quick_author=m.text.strip())
-    await state.set_state(LibS.quick_desc_state)
-    await m.answer("Введіть опис (або '-' для пропуску):")
-
-@dp.message(LibS.quick_desc_state)
-async def quick_desc(m: Message, state: FSMContext):
-    data = await state.get_data()
-    desc = m.text.strip()
-    if desc == '-':
-        desc = "Без опису"
-    await state.update_data(quick_desc=desc)
-    
-    if data.get('quick_status') == 'read':
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=str(i), callback_data=f"qr_{i}") for i in range(1, 6)],
-            [InlineKeyboardButton(text=str(i), callback_data=f"qr_{i}") for i in range(6, 11)]
-        ])
-        await state.set_state(LibS.quick_rating_state)
-        await m.answer("Оцінка 1-10:", reply_markup=kb)
-    else:
-        with sqlite3.connect('my_library.db') as conn:
-            conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added) VALUES (?,?,?,?,?,?,?)',
-                        (data['quick_title'], data['quick_author'], desc, 0, data['quick_file_id'], 'wish', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        await m.answer(f"✨ '{data['quick_title']}' додано в плани!")
         await state.clear()
-
+    else:
+        await m.answer("❌ Перешліть файл книги!")
 @dp.callback_query(F.data.startswith("qr_"))
 async def quick_rating(c: CallbackQuery, state: FSMContext):
     rating = c.data.split("_")[1]
