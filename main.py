@@ -41,6 +41,7 @@ def init_db():
 # ========== ШВИДКЕ ДОДАВАННЯ (АВТОМАТИЧНЕ) ==========
 @dp.message(F.text == "⚡ Швидке додавання")
 async def quick_mode(m: Message, state: FSMContext):
+    await state.clear()
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 2026", callback_data="quick_year_2026"),
          InlineKeyboardButton(text="❌ Без року", callback_data="quick_year_none")]
@@ -60,7 +61,14 @@ async def set_quick_year(c: CallbackQuery, state: FSMContext):
 @dp.message(F.document)
 async def auto_save_book(m: Message, state: FSMContext):
     data = await state.get_data()
+    
+    # Перевіряємо, чи активний режим швидкого додавання
     if not data.get('quick_mode_active'):
+        return
+    
+    # Перевіряємо, чи не йде покрокове додавання
+    current_state = await state.get_state()
+    if current_state and current_state.startswith('LibS:') and current_state != 'LibS:quick_year_state':
         return
     
     file_id = m.document.file_id
@@ -130,6 +138,62 @@ async def auto_save_book(m: Message, state: FSMContext):
 async def stop_quick_mode(m: Message, state: FSMContext):
     await state.update_data(quick_mode_active=False)
     await m.answer("❌ Режим швидкого додавання вимкнено!")
+
+# ========== ПОКРОКОВЕ ДОДАВАННЯ ==========
+@dp.message(F.text == "➕ Додати книгу")
+async def add(m: Message, state: FSMContext):
+    await state.update_data(quick_mode_active=False)
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Прочитала", callback_data="s_read"), InlineKeyboardButton(text="⏳ В плани", callback_data="s_wish")]])
+    await m.answer("Статус?", reply_markup=kb)
+
+@dp.callback_query(F.data.startswith("s_"))
+async def set_s(c: CallbackQuery, state: FSMContext):
+    await state.update_data(st='read' if c.data == "s_read" else 'wish')
+    await state.set_state(LibS.f)
+    await c.message.edit_text("Надішли файл книги:")
+
+@dp.message(LibS.f, F.document)
+async def p_f(m: Message, state: FSMContext):
+    await state.update_data(fid=m.document.file_id)
+    await state.set_state(LibS.t)
+    await m.answer("Назва книги:")
+
+@dp.message(LibS.t)
+async def p_t(m: Message, state: FSMContext):
+    await state.update_data(t=m.text.strip())
+    await state.set_state(LibS.a)
+    await m.answer("Автор:")
+
+@dp.message(LibS.a)
+async def p_a(m: Message, state: FSMContext):
+    await state.update_data(a=m.text.strip())
+    await state.set_state(LibS.d)
+    await m.answer("Опис:")
+
+@dp.message(LibS.d)
+async def p_d(m: Message, state: FSMContext):
+    data = await state.get_data()
+    if data['st'] == 'read':
+        await state.update_data(d=m.text.strip())
+        await state.set_state(LibS.r)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"r_{i}") for i in range(1, 6)], [InlineKeyboardButton(text=str(i), callback_data=f"r_{i}") for i in range(6, 11)]])
+        await m.answer("Оцінка 1-10:", reply_markup=kb)
+    else:
+        with sqlite3.connect('my_library.db') as conn:
+            conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added) VALUES (?,?,?,?,?,?,?)', (data['t'], data['a'], m.text.strip(), 0, data['fid'], 'wish', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        await m.answer("✨ Додано в плани!")
+        await state.clear()
+
+@dp.callback_query(F.data.startswith("r_"))
+async def p_r(c: CallbackQuery, state: FSMContext):
+    rating = c.data.split("_")[1]
+    data = await state.get_data()
+    year = datetime.now().year
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with sqlite3.connect('my_library.db') as conn:
+        conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) VALUES (?,?,?,?,?,?,?,?,?)', (data['t'], data['a'], data['d'], rating, data['fid'], 'read', now, now, year))
+    await c.message.edit_text(f"✅ Збережено з оцінкою {rating}/10 за {year} рік!")
+    await state.clear()
 
 # ========== ЗМІНА РОКУ ==========
 @dp.callback_query(F.data.startswith("change_year_"))
@@ -267,61 +331,6 @@ async def reread_book(c: CallbackQuery):
         title = conn.execute('SELECT title FROM books WHERE id = ?', (book_id,)).fetchone()[0]
     await c.message.answer(f"🔄 '{title}' перечитано за {year} рік!")
     await c.answer()
-
-# ========== ПОКРОКОВЕ ДОДАВАННЯ ==========
-@dp.message(F.text == "➕ Додати книгу")
-async def add(m: Message, state: FSMContext):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Прочитала", callback_data="s_read"), InlineKeyboardButton(text="⏳ В плани", callback_data="s_wish")]])
-    await m.answer("Статус?", reply_markup=kb)
-
-@dp.callback_query(F.data.startswith("s_"))
-async def set_s(c: CallbackQuery, state: FSMContext):
-    await state.update_data(st='read' if c.data == "s_read" else 'wish')
-    await state.set_state(LibS.f)
-    await c.message.edit_text("Надішли файл книги:")
-
-@dp.message(LibS.f, F.document)
-async def p_f(m: Message, state: FSMContext):
-    await state.update_data(fid=m.document.file_id)
-    await state.set_state(LibS.t)
-    await m.answer("Назва книги:")
-
-@dp.message(LibS.t)
-async def p_t(m: Message, state: FSMContext):
-    await state.update_data(t=m.text.strip())
-    await state.set_state(LibS.a)
-    await m.answer("Автор:")
-
-@dp.message(LibS.a)
-async def p_a(m: Message, state: FSMContext):
-    await state.update_data(a=m.text.strip())
-    await state.set_state(LibS.d)
-    await m.answer("Опис:")
-
-@dp.message(LibS.d)
-async def p_d(m: Message, state: FSMContext):
-    data = await state.get_data()
-    if data['st'] == 'read':
-        await state.update_data(d=m.text.strip())
-        await state.set_state(LibS.r)
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=str(i), callback_data=f"r_{i}") for i in range(1, 6)], [InlineKeyboardButton(text=str(i), callback_data=f"r_{i}") for i in range(6, 11)]])
-        await m.answer("Оцінка 1-10:", reply_markup=kb)
-    else:
-        with sqlite3.connect('my_library.db') as conn:
-            conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added) VALUES (?,?,?,?,?,?,?)', (data['t'], data['a'], m.text.strip(), 0, data['fid'], 'wish', datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        await m.answer("✨ Додано в плани!")
-        await state.clear()
-
-@dp.callback_query(F.data.startswith("r_"))
-async def p_r(c: CallbackQuery, state: FSMContext):
-    rating = c.data.split("_")[1]
-    data = await state.get_data()
-    year = datetime.now().year
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with sqlite3.connect('my_library.db') as conn:
-        conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) VALUES (?,?,?,?,?,?,?,?,?)', (data['t'], data['a'], data['d'], rating, data['fid'], 'read', now, now, year))
-    await c.message.edit_text(f"✅ Збережено з оцінкою {rating}/10 за {year} рік!")
-    await state.clear()
 
 # ========== ЗАВЕРШЕННЯ З ПЛАНІВ ==========
 @dp.callback_query(F.data.startswith("finish_"))
