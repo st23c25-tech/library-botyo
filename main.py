@@ -75,21 +75,29 @@ async def auto_save_book(m: Message, state: FSMContext):
     rating = 0
     
     lines = caption.split('\n')
+    description_lines = []
+    
     for line in lines:
         line = line.strip()
+        if not line:
+            continue
         if line.startswith('📖'):
             title = line.replace('📖', '').strip()
         elif line.startswith('👤'):
             author = line.replace('👤', '').strip()
-        elif line.startswith('📝'):
-            description = line.replace('📝', '').strip()
-        elif '⭐' in line and '/10' in line:
+        elif line.startswith('📊') and '⭐' in line:
             match = re.search(r'⭐️?\s*(\d+)/10', line)
             if match:
                 rating = int(match.group(1))
+        elif line.startswith('📝'):
+            desc_line = line.replace('📝', '').strip()
+            if desc_line:
+                description_lines.append(desc_line)
+        else:
+            if not line.startswith(('📖', '👤', '📊', '⭐', '📅')):
+                description_lines.append(line)
     
-    if not description and len(lines) > 2:
-        description = '\n'.join([l for l in lines if not l.startswith(('📖', '👤', '📊', '⭐'))])
+    description = '\n'.join(description_lines) if description_lines else "Додано через швидке додавання"
     
     year = data.get('quick_year')
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -111,8 +119,10 @@ async def auto_save_book(m: Message, state: FSMContext):
         result_text += f"📅 Рік: {year}\n"
     else:
         result_text += f"📅 Рік: не вказано\n"
-    if description:
-        result_text += f"📝 {description[:100]}..."
+    
+    desc_preview = description[:200] + "..." if len(description) > 200 else description
+    if desc_preview:
+        result_text += f"\n📝 {desc_preview}"
     
     await m.answer(result_text)
 
