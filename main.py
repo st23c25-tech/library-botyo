@@ -6,7 +6,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEx-o0K2coqsR0Tb5JHnM0JVzkY5Z4HXVI')
+TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEHReRHUMRx5feJJoU-gvOtRh340MQZhzI')
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
