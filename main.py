@@ -1,4 +1,4 @@
-import logging, sqlite3, asyncio, os
+import logging, sqlite3, asyncio, os, re
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -6,7 +6,7 @@ from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, C
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
-TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEHReRHUMRx5feJJoU-gvOtRh340MQZhzI')
+TOKEN = os.getenv('BOT_TOKEN', '8463058055:AAEx-o0K2coqsR0Tb5JHnM0JVzkY5Z4HXVI')
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
@@ -21,11 +21,7 @@ class LibS(StatesGroup):
     edit_val = State()
     search_state = State()
     set_year_state = State()
-    # Стани для швидкого додавання
     quick_year_state = State()
-    quick_author_state = State()
-    quick_desc_state = State()
-    quick_rating_state = State()
 
 def init_db():
     with sqlite3.connect('my_library.db') as conn:
@@ -42,94 +38,88 @@ def init_db():
             except:
                 pass
 
-# ========== ШВИДКЕ ДОДАВАННЯ (БЕЗ ЗАЙВИХ ПИТАНЬ) ==========
+# ========== ШВИДКЕ ДОДАВАННЯ (АВТОМАТИЧНЕ) ==========
 @dp.message(F.text == "⚡ Швидке додавання")
 async def quick_mode(m: Message, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Прочитала", callback_data="q_read"),
-         InlineKeyboardButton(text="⏳ В плани", callback_data="q_wish")]
+        [InlineKeyboardButton(text="📅 2026", callback_data="quick_year_2026"),
+         InlineKeyboardButton(text="❌ Без року", callback_data="quick_year_none")]
     ])
-    await m.answer("Оберіть статус:", reply_markup=kb)
+    await m.answer("Оберіть рік прочитання:", reply_markup=kb)
 
-@dp.callback_query(F.data.startswith("q_"))
-async def quick_status(c: CallbackQuery, state: FSMContext):
-    status = 'read' if c.data == "q_read" else 'wish'
-    await state.update_data(quick_status=status)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Цього року", callback_data="qy_this"),
-         InlineKeyboardButton(text="Інший рік", callback_data="qy_other")]
-    ])
-    await c.message.edit_text("Оберіть рік:", reply_markup=kb)
-
-@dp.callback_query(F.data.startswith("qy_"))
-async def quick_year(c: CallbackQuery, state: FSMContext):
-    if c.data == "qy_this":
-        await state.update_data(quick_year=datetime.now().year)
-        await c.message.edit_text("✅ Тепер просто перешліть файл книги - я сам все збережу!")
-        await state.set_state(LibS.quick_year_state)
+@dp.callback_query(F.data.startswith("quick_year_"))
+async def set_quick_year(c: CallbackQuery, state: FSMContext):
+    if c.data == "quick_year_2026":
+        await state.update_data(quick_year=2026, quick_mode_active=True)
+        await c.message.edit_text("✅ Режим швидкого додавання активовано!\nРік: 2026\n\nТепер просто **пересилайте повідомлення з книгою** (файл + текст).\n\nЩоб вимкнути режим, надішліть /stop")
     else:
-        await c.message.edit_text("Введіть рік (наприклад: 2020):")
-        await state.set_state(LibS.quick_year_state)
+        await state.update_data(quick_year=None, quick_mode_active=True)
+        await c.message.edit_text("✅ Режим швидкого додавання активовано!\nРік: Без року\n\nТепер просто **пересилайте повідомлення з книгою** (файл + текст).\n\nЩоб вимкнути режим, надішліть /stop")
+    await c.answer()
 
-@dp.message(LibS.quick_year_state)
-async def quick_receive(m: Message, state: FSMContext):
+@dp.message(F.document)
+async def auto_save_book(m: Message, state: FSMContext):
     data = await state.get_data()
+    if not data.get('quick_mode_active'):
+        return
     
-    # Якщо ще немає року - це введення року
-    if 'quick_year' not in data:
-        try:
-            year = int(m.text.strip())
-            if 1900 <= year <= datetime.now().year:
-                await state.update_data(quick_year=year)
-                await m.answer("✅ Рік збережено! Тепер перешліть файл книги:")
-                return
-            else:
-                await m.answer(f"❌ Введіть рік 1900-{datetime.now().year}")
-                return
-        except:
-            await m.answer("❌ Введіть число!")
-            return
+    file_id = m.document.file_id
+    file_name = m.document.file_name or "Невідома назва"
+    title_from_file = file_name.rsplit('.', 1)[0]
     
-    # Якщо є рік і це файл - ЗБЕРІГАЄМО БЕЗ ЗАЙВИХ ПИТАНЬ!
-    if m.document:
-        file_id = m.document.file_id
-        file_name = m.document.file_name or "Невідома назва"
-        title = file_name.rsplit('.', 1)[0]
-        author = "Невідомий автор"
-        description = "Додано через швидке додавання"
-        year = data.get('quick_year', datetime.now().year)
-        
-        if data.get('quick_status') == 'read':
-            with sqlite3.connect('my_library.db') as conn:
-                conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) 
-                               VALUES (?,?,?,?,?,?,?,?,?)''',
-                               (title, author, description, 0, file_id, 'read', 
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S'), year))
-            await m.answer(f"✅ {title} додано до ПРОЧИТАНИХ!\n📅 Рік: {year}")
-        else:
-            with sqlite3.connect('my_library.db') as conn:
-                conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added) 
-                               VALUES (?,?,?,?,?,?,?)''',
-                               (title, author, description, 0, file_id, 'wish', 
-                                datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-            await m.answer(f"✨ {title} додано до ПЛАНІВ!")
-        
-        await state.clear()
-    else:
-        await m.answer("❌ Перешліть файл книги!")
-@dp.callback_query(F.data.startswith("qr_"))
-async def quick_rating(c: CallbackQuery, state: FSMContext):
-    rating = c.data.split("_")[1]
-    data = await state.get_data()
-    year = data.get('quick_year', datetime.now().year)
+    caption = m.caption or ""
+    
+    title = title_from_file
+    author = "Невідомий автор"
+    description = ""
+    rating = 0
+    
+    lines = caption.split('\n')
+    for line in lines:
+        line = line.strip()
+        if line.startswith('📖'):
+            title = line.replace('📖', '').strip()
+        elif line.startswith('👤'):
+            author = line.replace('👤', '').strip()
+        elif line.startswith('📝'):
+            description = line.replace('📝', '').strip()
+        elif '⭐' in line and '/10' in line:
+            match = re.search(r'⭐️?\s*(\d+)/10', line)
+            if match:
+                rating = int(match.group(1))
+    
+    if not description and len(lines) > 2:
+        description = '\n'.join([l for l in lines if not l.startswith(('📖', '👤', '📊', '⭐'))])
+    
+    year = data.get('quick_year')
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    
     with sqlite3.connect('my_library.db') as conn:
-        conn.execute('INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) VALUES (?,?,?,?,?,?,?,?,?)',
-                    (data['quick_title'], data['quick_author'], data['quick_desc'], rating,
-                     data['quick_file_id'], 'read', now, now, year))
-    await c.message.edit_text(f"✅ '{data['quick_title']}' додано з оцінкою {rating}/10 за {year} рік!")
-    await state.clear()
+        if year:
+            conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read, read_year) 
+                           VALUES (?,?,?,?,?,?,?,?,?)''',
+                           (title, author, description, rating, file_id, 'read', now, now, year))
+        else:
+            conn.execute('''INSERT INTO books (title, author, description, rating, file_id, status, date_added, date_read) 
+                           VALUES (?,?,?,?,?,?,?,?)''',
+                           (title, author, description, rating, file_id, 'read', now, now))
+    
+    result_text = f"✅ **{title}** додано до ПРОЧИТАНИХ!\n👤 {author}\n"
+    if rating > 0:
+        result_text += f"⭐ Оцінка: {rating}/10\n"
+    if year:
+        result_text += f"📅 Рік: {year}\n"
+    else:
+        result_text += f"📅 Рік: не вказано\n"
+    if description:
+        result_text += f"📝 {description[:100]}..."
+    
+    await m.answer(result_text)
+
+@dp.message(Command("stop"))
+async def stop_quick_mode(m: Message, state: FSMContext):
+    await state.update_data(quick_mode_active=False)
+    await m.answer("❌ Режим швидкого додавання вимкнено!")
 
 # ========== ЗМІНА РОКУ ==========
 @dp.callback_query(F.data.startswith("change_year_"))
@@ -179,9 +169,9 @@ async def show_stats(m: Message):
         total_wish = conn.execute('SELECT COUNT(*) FROM books WHERE status = "wish"').fetchone()[0]
         avg = conn.execute('SELECT AVG(rating) FROM books WHERE status = "read" AND rating > 0').fetchone()[0] or 0
         rereads = conn.execute('SELECT SUM(reread_count) FROM books WHERE status = "read"').fetchone()[0] or 0
-        year_read = conn.execute('SELECT COUNT(*) FROM books WHERE status = "read" AND read_year = ?', (datetime.now().year,)).fetchone()[0]
+        year_read = conn.execute('SELECT COUNT(*) FROM books WHERE status = "read" AND read_year = ?', (2026,)).fetchone()[0]
         top = conn.execute('SELECT title, rating FROM books WHERE status = "read" AND rating > 0 ORDER BY rating DESC LIMIT 5').fetchall()
-        text = f"📊 **СТАТИСТИКА**\n\n📚 Прочитано: {total_read}\n📌 В планах: {total_wish}\n⭐ Сер. рейтинг: {avg:.1f}/10\n🔄 Перечитань: {rereads}\n📅 За {datetime.now().year}: {year_read} книг\n\n⭐ **Топ-5:**\n" + "\n".join([f"{i+1}. {b[0]} - {b[1]}/10" for i,b in enumerate(top)]) if top else "Немає оцінок"
+        text = f"📊 **СТАТИСТИКА**\n\n📚 Прочитано: {total_read}\n📌 В планах: {total_wish}\n⭐ Сер. рейтинг: {avg:.1f}/10\n🔄 Перечитань: {rereads}\n📅 За 2026 рік: {year_read} книг\n\n⭐ **Топ-5:**\n" + "\n".join([f"{i+1}. {b[0]} - {b[1]}/10" for i,b in enumerate(top)]) if top else "Немає оцінок"
     await m.answer(text, parse_mode="Markdown")
 
 # ========== ЗВІТ ЗА РІК ==========
@@ -207,6 +197,23 @@ async def show_report(c: CallbackQuery):
     await c.message.answer(text[:4000], parse_mode="Markdown")
 
 # ========== ПОКАЗ КНИГ ==========
+async def send_book_info(chat_id, book_data):
+    b_id, t, a, d, r, f_id, st, da, dr, rr, ry = book_data[:11]
+    cap = f"📖 {t}\n👤 {a}\n📝 {d}\n"
+    if st == 'read':
+        cap += f"📊 ⭐ {r}/10\n"
+        if ry: cap += f"📅 Прочитано: {ry} рік\n"
+    else:
+        cap += f"📌 В планах\n"
+    btns = []
+    if st == 'wish':
+        btns.append([InlineKeyboardButton(text="✅ Вже прочитала", callback_data=f"finish_{b_id}")])
+    btns.append([InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"menu_{b_id}"), InlineKeyboardButton(text="🗑 Видалити", callback_data=f"del_{b_id}")])
+    try:
+        await bot.send_document(chat_id, f_id, caption=cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+    except:
+        await bot.send_message(chat_id, cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+
 @dp.message(F.text.in_(["📚 Прочитане", "📝 Хочу прочитати"]))
 async def show(m: Message):
     st = 'read' if "Прочитане" in m.text else 'wish'
@@ -215,21 +222,7 @@ async def show(m: Message):
     if not books:
         return await m.answer("Порожньо.")
     for book in books:
-        b_id, t, a, d, r, f_id, st, da, dr, rr, ry = book[:11]
-        cap = f"📖 {t}\n👤 {a}\n📝 {d}\n"
-        if st == 'read':
-            cap += f"📊 ⭐ {r}/10\n"
-            if ry: cap += f"📅 Прочитано: {ry} рік\n"
-        else:
-            cap += f"📌 В планах\n"
-        btns = []
-        if st == 'wish':
-            btns.append([InlineKeyboardButton(text="✅ Вже прочитала", callback_data=f"finish_{b_id}")])
-        btns.append([InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"menu_{b_id}"), InlineKeyboardButton(text="🗑 Видалити", callback_data=f"del_{b_id}")])
-        try:
-            await bot.send_document(m.chat.id, f_id, caption=cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
-        except:
-            await m.answer(cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+        await send_book_info(m.chat.id, book)
 
 # ========== ПОШУК ==========
 @dp.message(F.text == "🔍 Пошук")
@@ -251,21 +244,7 @@ async def search_logic(m: Message, state: FSMContext):
         return
     await m.answer(f"🔍 Знайдено {len(books)} книг:")
     for book in books:
-        b_id, t, a, d, r, f_id, st, da, dr, rr, ry = book[:11]
-        cap = f"📖 {t}\n👤 {a}\n📝 {d}\n"
-        if st == 'read':
-            cap += f"📊 ⭐ {r}/10\n"
-            if ry: cap += f"📅 Прочитано: {ry} рік\n"
-        else:
-            cap += f"📌 В планах\n"
-        btns = []
-        if st == 'wish':
-            btns.append([InlineKeyboardButton(text="✅ Вже прочитала", callback_data=f"finish_{b_id}")])
-        btns.append([InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"menu_{b_id}"), InlineKeyboardButton(text="🗑 Видалити", callback_data=f"del_{b_id}")])
-        try:
-            await bot.send_document(m.chat.id, f_id, caption=cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
-        except:
-            await m.answer(cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+        await send_book_info(m.chat.id, book)
     await state.clear()
 
 # ========== ПЕРЕЧИТУВАННЯ ==========
@@ -409,21 +388,7 @@ async def back_to_book(c: CallbackQuery):
     with sqlite3.connect('my_library.db') as conn:
         book = conn.execute('SELECT id, title, author, description, rating, file_id, status, date_added, date_read, reread_count, read_year FROM books WHERE id = ?', (b_id,)).fetchone()
         if book:
-            b_id, t, a, d, r, f_id, st, da, dr, rr, ry = book[:11]
-            cap = f"📖 {t}\n👤 {a}\n📝 {d}\n"
-            if st == 'read':
-                cap += f"📊 ⭐ {r}/10\n"
-                if ry: cap += f"📅 Прочитано: {ry} рік\n"
-            else:
-                cap += f"📌 В планах\n"
-            btns = []
-            if st == 'wish':
-                btns.append([InlineKeyboardButton(text="✅ Вже прочитала", callback_data=f"finish_{b_id}")])
-            btns.append([InlineKeyboardButton(text="✏️ Редагувати", callback_data=f"menu_{b_id}"), InlineKeyboardButton(text="🗑 Видалити", callback_data=f"del_{b_id}")])
-            try:
-                await bot.send_document(c.message.chat.id, f_id, caption=cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
-            except:
-                await c.message.answer(cap, reply_markup=InlineKeyboardMarkup(inline_keyboard=btns))
+            await send_book_info(c.message.chat.id, book)
 
 @dp.callback_query(F.data.startswith("del_"))
 async def delete(c: CallbackQuery):
